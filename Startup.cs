@@ -18,7 +18,7 @@ namespace TodoApi
         private readonly string _policyName = "CorsPolicy"; //este nombre es para la aplicación del atributo
 
         //list de sitios permitidos se deberia leer de algun repositorio (appsetting, etc)
-        private readonly string[] _origin_Allowed = { "https://localhost:4200", "https://localhost:44307" };
+        private readonly string[] _origin_Allowed = { "http://localhost:4200", "https://localhost:4200", "https://localhost:44307" };
         private  IAntiforgery _antiforgery;
         public Startup(IConfiguration configuration)
         {
@@ -35,19 +35,23 @@ namespace TodoApi
             
             services.AddCors(options => options.AddPolicy(_policyName, builder =>
             {
-                builder.WithOrigins(_origin_Allowed)
+                builder.AllowAnyOrigin() //WithOrigins("http://localhost:4200", "https://localhost:4200", "https://localhost:44307")
                 .AllowAnyMethod()
-                .WithHeaders("x-csrf-token", "content-type"); //.AllowAnyHeader();
+                .WithHeaders("X-XSRF-TOKEN", "content-type"); //; .AllowAnyHeader();
             }));
- 
+           
+            services.AddAntiforgery(options => options.HeaderName = "X-XSRF-TOKEN");
+            
             services.AddControllers();
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "TodoApi", Version = "v1" });
+                c.OperationFilter<XsfrHeaderSW>();
             });
 
-            services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
-            
+       
+
+
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -59,12 +63,14 @@ namespace TodoApi
                 app.UseSwagger();
                 app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "TodoApi v1"));
             }
-            
-//            app.UseAntiforgeryTokens();
-
 
             app.Use(async (context, next) =>
             {
+                /*
+                         _antiforgery = app.ApplicationServices.GetRequiredService<IAntiforgery>();
+                         var tokens = _antiforgery.GetTokens(context);
+                         context.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken, new CookieOptions() { HttpOnly = false }); 
+         */
                 context.Response.Headers.Add("Content-Security-Policy", "default-src 'self'; form-action 'self'");
                 context.Response.Headers.Add("Referrer-Policy", "strict-origin-when-cross-origin");
                 context.Response.Headers.Add("X-Content-Type-Options", "nosniff");
@@ -72,13 +78,43 @@ namespace TodoApi
                 context.Response.Headers.Add("X-XSS-Protection", "1; mode=block");
                 context.Response.Headers.Add("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
 
+
+                //   return next();
                 await next();
             });
-             //   quizas sea mejor trabajar sobre user agent (que no es bueno para nadie), que si viene desde postman, no se desde curl
-    
+
+            //   quizas sea mejor trabajar sobre user agent (que no es bueno para nadie), que si viene desde postman, no se desde curl
+
+
+
+
+
+
+            app.UseHttpsRedirection();
+          
+            app.PLXAntiforgeryTokens(); // la puse este bonito y propietario nombre para la implemntaci+on 
+            app.UseRouting();
+            app.UseCors(_policyName);  // despues se puede usar por metodo como atributo en el controlador
+
+            app.UseAuthorization();
+
             app.Use(async (context, next) =>
             {
-                string referer = context.Request.Headers["Referer"].ToString(); 
+            //cosas locas si pongo esto debajo del if deja de funcionar
+            string referer = context.Request.Headers["Referer"].ToString();
+
+       //         if (_origin_Allowed.Any(origin => referer.StartsWith(origin, StringComparison.OrdinalIgnoreCase)))
+         //       {
+                    _antiforgery = app.ApplicationServices.GetRequiredService<IAntiforgery>();
+                    var tokens = _antiforgery.GetAndStoreTokens(context);//GetTokens(context);
+                context.Response.Cookies.Append("XSRF-TOKEN", tokens.RequestToken, new CookieOptions() { HttpOnly = false });
+                    await next();
+           //    }
+            });
+
+            app.Use(async (context, next) =>
+            {
+                string referer = context.Request.Headers["Referer"].ToString();
 
                 if (string.IsNullOrWhiteSpace(referer) || !_origin_Allowed.Any(origin => referer.StartsWith(origin, StringComparison.OrdinalIgnoreCase)))
                 {
@@ -89,34 +125,6 @@ namespace TodoApi
                 }
                 await next();
             });
-
-            _antiforgery = app.ApplicationServices.GetRequiredService<IAntiforgery>();
-
-            app.Use((context, next) =>
-            {
-                string path = context.Request.Path.Value;
-
-                if (string.Equals(path, "/", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(path, "/index.html", StringComparison.OrdinalIgnoreCase))
-                {
-                    // The request token can be sent as a JavaScript-readable cookie,
-                    
-                     var tokens = _antiforgery.GetAndStoreTokens(context);
-                    context.Response.Cookies.Append("X-XSRF-TOKEN", tokens.RequestToken,
-                        new CookieOptions() { HttpOnly = false });
-                   
-                }
-                return next();
-            });
-
-            app.UseHttpsRedirection();
-            //app.UseMiddleware<ValidateAntiForgeryTokenMiddleware>();
-            app.PLXAntiforgeryTokens();
-            app.UseRouting();
-            app.UseCors(_policyName);  // despues se puede usar por metodo como atributo en el controlador
-
-            app.UseAuthorization();
-
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers().RequireCors(_policyName);
